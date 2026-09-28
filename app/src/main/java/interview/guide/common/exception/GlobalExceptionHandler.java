@@ -1,0 +1,193 @@
+/**
+ * 全局异常处理器
+ *
+ * 使用 @RestControllerAdvice 统一捕获所有异常，返回 HTTP 200 + Result.error 格式响应。
+ * 处理的异常类型包括：BusinessException、参数校验异常、绑定异常、文件大小超限、
+ * 非法参数、AI 服务网络异常（SSL/超时）、AI 服务调用异常（401/429）、
+ * 404 资源未找到、请求方法不支持、以及其他未知异常。
+ *
+ * 联动关系：
+ * - 依赖 Result 构建统一响应
+ * - 依赖 ErrorCode 构建错误码响应
+ * - 捕获 BusinessException（含 RateLimitExceededException）及各类框架异常
+ */
+package interview.guide.common.exception;
+
+import interview.guide.common.result.Result;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
+import org.springframework.validation.BindException;
+import org.springframework.validation.FieldError;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestClientException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+
+import java.net.SocketTimeoutException;
+import java.util.stream.Collectors;
+
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+
+    /**
+     * 设计决策：所有异常统一返回 HTTP 200，通过响应 body 中的业务错误码（code 字段）区分成功/失败。
+     *
+     * <p>为什么不用 HTTP 400/500 等状态码？
+     * <ul>
+     *   <li><b>前端统一处理</b>：前端只需解析 JSON body 的 code 字段判断业务状态，无需区分 HTTP 层状态码</li>
+     *   <li><b>网关兼容</b>：部分网关/负载均衡器可能对非 200 状态码有特殊处理（重试、熔断）</li>
+     *   <li><b>调试友好</b>：所有响应都是 200，开发者可在浏览器 DevTools 中直接查看完整 JSON 响应</li>
+     * </ul>
+     *
+     * <p>异常处理优先级（Spring @ExceptionHandler 按方法声明顺序匹配，最具体优先）：
+     * <ol>
+     *   <li>BusinessException（含 RateLimitExceededException 子类）→ 业务错误码</li>
+     *   <li>MethodArgumentNotValidException / BindException → BAD_REQUEST</li>
+     *   <li>ResourceAccessException（AI 网络异常）→ AI_SERVICE_UNAVAILABLE / AI_SERVICE_TIMEOUT</li>
+     *   <li>RestClientException（AI 调用异常）→ AI_API_KEY_INVALID / AI_RATE_LIMIT_EXCEEDED</li>
+     *   <li>Exception（兜底）→ INTERNAL_ERROR</li>
+     * </ol>
+     */
+
+    /** 日志记录器 */
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+    
+    /**
+     * 处理业务异常
+     * 补货service层抛出的bussinessException
+     * 然后转成result返回给前端，代码逻辑是这样配置的。
+     */
+    @ExceptionHandler(BusinessException.class)
+    @ResponseStatus(HttpStatus.OK)
+    public Result<Void> handleBusinessException(BusinessException e) {
+        log.warn("业务异常: code={}, message={}", e.getCode(), e.getMessage());
+        return Result.error(e.getCode(), e.getMessage());
+    }
+    
+    /**
+     * 处理参数校验异常
+     */
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    @ResponseStatus(HttpStatus.OK)
+    public Result<Void> handleValidationException(MethodArgumentNotValidException e) {
+        String message = e.getBindingResult().getFieldErrors().stream()
+                .map(FieldError::getDefaultMessage)
+                .collect(Collectors.joining(", "));
+        log.warn("参数校验失败: {}", message);
+        return Result.error(ErrorCode.BAD_REQUEST, message);
+    }
+    
+    /**
+     * 处理绑定异常
+     */
+    @ExceptionHandler(BindException.class)
+    @ResponseStatus(HttpStatus.OK)
+    public Result<Void> handleBindException(BindException e) {
+        String message = e.getBindingResult().getFieldErrors().stream()
+                .map(FieldError::getDefaultMessage)
+                .collect(Collectors.joining(", "));
+        log.warn("参数绑定失败: {}", message);
+        return Result.error(ErrorCode.BAD_REQUEST, message);
+    }
+    
+    /**
+     * 处理文件上传大小超限异常
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    @ResponseStatus(HttpStatus.OK)
+    public Result<Void> handleMaxUploadSizeExceededException(MaxUploadSizeExceededException e) {
+        log.warn("文件上传大小超限: {}", e.getMessage());
+        return Result.error(ErrorCode.BAD_REQUEST, "文件大小超过限制");
+    }
+    
+    /**
+     * 处理非法参数异常
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    @ResponseStatus(HttpStatus.OK)
+    public Result<Void> handleIllegalArgumentException(IllegalArgumentException e) {
+        log.warn("非法参数: {}", e.getMessage());
+        return Result.error(ErrorCode.BAD_REQUEST, e.getMessage());
+    }
+    
+    /**
+     * 处理 AI 服务网络异常（SSL握手失败、连接超时等）
+     * 统一返回 HTTP 200，通过业务错误码区分异常类型
+     */
+    @ExceptionHandler(ResourceAccessException.class)
+    @ResponseStatus(HttpStatus.OK)
+    public Result<Void> handleResourceAccessException(ResourceAccessException e) {
+        log.error("AI服务连接失败: {}", e.getMessage(), e);
+        
+        // 判断具体异常类型
+        Throwable cause = e.getCause();
+        if (cause instanceof SocketTimeoutException) {
+            return Result.error(ErrorCode.AI_SERVICE_TIMEOUT, "AI服务响应超时，请稍后重试");
+        }
+        
+        // SSL握手失败或其他网络问题
+        String message = e.getMessage();
+        if (message != null && message.contains("handshake")) {
+            return Result.error(ErrorCode.AI_SERVICE_UNAVAILABLE, "AI服务连接失败（网络不稳定），请检查网络或稍后重试");
+        }
+        
+        return Result.error(ErrorCode.AI_SERVICE_UNAVAILABLE, "AI服务暂时不可用，请稍后重试");
+    }
+    
+    /**
+     * 处理 AI 服务调用异常
+     * 统一返回 HTTP 200，通过业务错误码区分异常类型
+     */
+    @ExceptionHandler(RestClientException.class)
+    @ResponseStatus(HttpStatus.OK)
+    public Result<Void> handleRestClientException(RestClientException e) {
+        log.error("AI服务调用失败: {}", e.getMessage(), e);
+        
+        String message = e.getMessage();
+        if (message != null) {
+            if (message.contains("401") || message.contains("Unauthorized")) {
+                return Result.error(ErrorCode.AI_API_KEY_INVALID, "AI服务密钥无效，请联系管理员");
+            }
+            if (message.contains("429") || message.contains("Too Many Requests")) {
+                return Result.error(ErrorCode.AI_RATE_LIMIT_EXCEEDED, "AI服务调用过于频繁，请稍后重试");
+            }
+        }
+        
+        return Result.error(ErrorCode.AI_SERVICE_ERROR, "AI服务调用失败，请稍后重试");
+    }
+    
+    /**
+     * 处理 404 - 资源未找到异常
+     */
+    @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
+    @ResponseStatus(HttpStatus.OK)
+    public Result<Void> handleNoResourceFoundException(org.springframework.web.servlet.resource.NoResourceFoundException e) {
+        log.warn("资源未找到: {}", e.getResourcePath());
+        return Result.error(ErrorCode.NOT_FOUND, "API 接口不存在");
+    }
+
+    /**
+     * 处理请求方法不支持异常
+     */
+    @ExceptionHandler(org.springframework.web.HttpRequestMethodNotSupportedException.class)
+    @ResponseStatus(HttpStatus.OK)
+    public Result<Void> handleHttpRequestMethodNotSupportedException(org.springframework.web.HttpRequestMethodNotSupportedException e) {
+        log.warn("请求方法不支持: {} {}", e.getMethod(), e.getSupportedHttpMethods());
+        return Result.error(ErrorCode.METHOD_NOT_ALLOWED, "请求方法不支持: " + e.getMethod());
+    }
+
+    /**
+     * 处理其他未知异常
+     * 统一返回 HTTP 200，通过业务错误码区分异常类型
+     */
+    @ExceptionHandler(Exception.class)
+    @ResponseStatus(HttpStatus.OK)
+    public Result<Void> handleException(Exception e) {
+        log.error("系统异常: {}", e.getMessage(), e);
+        return Result.error(ErrorCode.INTERNAL_ERROR, "系统繁忙，请稍后重试");
+    }
+}

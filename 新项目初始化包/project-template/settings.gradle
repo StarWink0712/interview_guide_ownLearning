@@ -1,0 +1,12 @@
+pluginManagement {
+  repositories {
+    maven { url 'https://maven.aliyun.com/repository/gradle-plugin/' }
+    gradlePluginPortal()
+  }
+}
+
+dependencyResolutionManagement {
+  repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
+}
+
+rootProject.name = 'interview-guide-rebuild'

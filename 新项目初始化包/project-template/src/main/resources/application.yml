@@ -1,0 +1,37 @@
+server:
+  port: ${SERVER_PORT:8081}
+  servlet:
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
+
+spring:
+  application:
+    name: interview-guide-rebuild
+  config:
+    import: optional:file:.env[.properties]
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5433}/${POSTGRES_DB:interview_guide_rebuild}
+    username: ${POSTGRES_USER:postgres}
+    password: ${POSTGRES_PASSWORD:rebuild_password}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+
+logging:
+  charset:
+    console: UTF-8
+    file: UTF-8
+  level:
+    root: INFO
+    interview.guide: DEBUG

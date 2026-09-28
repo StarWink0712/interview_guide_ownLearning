@@ -1,0 +1,32 @@
+# Gradle
+.gradle/
+build/
+
+# IntelliJ IDEA
+.idea/
+*.iml
+out/
+
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
+
+# Runtime configuration and secrets
+.env
+*.local.yml
+
+# Logs
+logs/
+*.log
+
+# Test output
+test-output/
+
+# Frontend, added in a later phase
+frontend/node_modules/
+frontend/dist/
+
+# Local uploads, added in a later phase
+uploads/

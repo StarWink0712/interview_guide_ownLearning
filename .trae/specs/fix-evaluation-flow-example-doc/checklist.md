@@ -1,0 +1,9 @@
+- [x] 步骤 1 的输入描述为 `ChatClient, sessionId, resumeText, List<InterviewQuestionDTO>`
+- [x] 步骤 1 的输出描述为 `InterviewReportDTO`（非中间变量 `List<QaRecord>`）
+- [x] 步骤 1 的数据流正确描述了中间变量 → 最终输出的完整链路
+- [x] 步骤 2-6 的输入/输出与源码对应关系准确
+- [x] 步骤 7 描述了 `toInterviewReportDTO()` 将 `EvaluationReport` 转为 `InterviewReportDTO`
+- [x] 降级策略示例中的代码行号与源码一致
+- [x] 完整流程总结图正确反映数据流
+- [x] 文档写入路径 `/app/src/main/java/interview/guide/common/evaluation/analysis/流程举例.md`
+- [x] 文档格式规范、逻辑清晰
